@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,11 +19,18 @@ import (
 
 const HASH_DATATYPE string = "hash"
 const STRING_DATATYPE string = "string"
+const LIST_DATATYPE string = "list"
+const SET_DATATYPE string = "set"
+const ZSET_DATATYPE string = "zset"
 const JSON_DATATYPE string = "json"
 const JSON_SET string = "JSON.SET"
 const JSON_GET string = "JSON.GET"
 const HSET string = "HSET"
 const HMGET string = "HMGET"
+const ZADD string = "ZADD"
+const ZRANGE string = "ZRANGE"
+const SADD string = "SADD"
+const SMEMBERS string = "SMEMBERS"
 
 type redisClient interface {
 	Get(ctx context.Context, key string) *goredis.StringCmd
@@ -87,6 +96,26 @@ func (r *redis) Read(ctx context.Context, table string, key string, fields []str
 		for pos, slicePos := range sliceReply {
 			data[fields[pos]] = []byte(slicePos)
 		}
+	case SET_DATATYPE:
+		args := make([]interface{}, 0, len(fields)+2)
+		args = append(args, SMEMBERS, getKeyName(table, key))
+		sliceReply, errI := r.client.Do(ctx, args...).StringSlice()
+		if errI != nil {
+			return
+		}
+		for pos, slicePos := range sliceReply {
+			data[slicePos] = []byte(strconv.Itoa(pos))
+		}
+	case ZSET_DATATYPE:
+		args := make([]interface{}, 0, 5)
+		args = append(args, ZRANGE, getKeyName(table, key), "0", "-1", "WITHSCORES")
+		sliceReply, errI := r.client.Do(ctx, args...).StringSlice()
+		if errI != nil {
+			return
+		}
+		for i := 0; i < len(sliceReply); i += 2 {
+			data[sliceReply[i]] = []byte(sliceReply[i+1])
+		}
 	case STRING_DATATYPE:
 		fallthrough
 	default:
@@ -138,6 +167,21 @@ func (r *redis) Update(ctx context.Context, table string, key string, values map
 		args = append(args, HSET, getKeyName(table, key))
 		for fieldName, bytes := range values {
 			args = append(args, fieldName, string(bytes))
+		}
+		err = r.client.Do(ctx, args...).Err()
+	case SET_DATATYPE:
+		args := make([]interface{}, 0, len(values)+2)
+		args = append(args, SADD, getKeyName(table, key))
+		for fieldName, _ := range values {
+			args = append(args, fieldName)
+		}
+		err = r.client.Do(ctx, args...).Err()
+	case ZSET_DATATYPE:
+		args := make([]interface{}, 0, 2*len(values)+2)
+		args = append(args, ZADD, getKeyName(table, key))
+		for fieldName, bytes := range values {
+			score := crc32.ChecksumIEEE(bytes)
+			args = append(args, score, fieldName)
 		}
 		err = r.client.Do(ctx, args...).Err()
 	case STRING_DATATYPE:
@@ -205,6 +249,21 @@ func (r *redis) Insert(ctx context.Context, table string, key string, values map
 		args = append(args, HSET, getKeyName(table, key))
 		for fieldName, bytes := range values {
 			args = append(args, fieldName, string(bytes))
+		}
+		err = r.client.Do(ctx, args...).Err()
+	case SET_DATATYPE:
+		args := make([]interface{}, 0, len(values)+2)
+		args = append(args, SADD, getKeyName(table, key))
+		for fieldName, _ := range values {
+			args = append(args, fieldName)
+		}
+		err = r.client.Do(ctx, args...).Err()
+	case ZSET_DATATYPE:
+		args := make([]interface{}, 0, 2*len(values)+2)
+		args = append(args, ZADD, getKeyName(table, key))
+		for fieldName, bytes := range values {
+			score := crc32.ChecksumIEEE(bytes)
+			args = append(args, score, fieldName)
 		}
 		err = r.client.Do(ctx, args...).Err()
 	case STRING_DATATYPE:
